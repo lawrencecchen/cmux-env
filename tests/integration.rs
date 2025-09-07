@@ -41,6 +41,9 @@ fn ping_and_status() {
     run_envctl(&tmp, &["status"]).success().stdout(predicate::str::contains("generation:"));
 
     let _ = child.kill();
+    let _ = child.wait();
+    let _ = child.wait();
+    let _ = child.wait();
 }
 
 #[test]
@@ -61,6 +64,7 @@ fn set_and_export_bash() {
         .stdout(predicate::str::contains("unset -v FOO"));
 
     let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[test]
@@ -88,6 +92,7 @@ fn dir_scoped_overlay() {
         .success().stdout(predicate::str::contains("export VAR='global'"));
 
     let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[test]
@@ -117,6 +122,7 @@ fn export_then_eval_in_bash_updates_env() {
     assert!(s.lines().last().unwrap_or("") == "bar");
 
     let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[test]
@@ -136,7 +142,7 @@ fn minimal_diff_with_generation() {
     assert!(gen_line.contains("ENVCTL_GEN"));
 
     // parse gen
-    let gen: u64 = gen_line.split('=').last().unwrap().trim().parse().unwrap();
+    let gen: u64 = gen_line.split('=').next_back().unwrap().trim().parse().unwrap();
 
     // No change; export again since current gen should not include X=1 again
     let second = Command::cargo_bin("envctl").unwrap()
@@ -150,6 +156,7 @@ fn minimal_diff_with_generation() {
     assert!(out2.contains("ENVCTL_GEN"));
 
     let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[test]
@@ -184,6 +191,7 @@ export PATH="/app/target/debug:$PATH"
     p.expect("42").unwrap();
 
     let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn hook_text_bash() -> String {
@@ -224,4 +232,5 @@ fn load_from_stdin() {
         .stdout(predicate::str::contains("FOO=bar").and(predicate::str::contains("BAZ=qux")));
 
     let _ = child.kill();
+    let _ = child.wait();
 }

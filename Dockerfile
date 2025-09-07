@@ -9,6 +9,7 @@ RUN mkdir -p src && echo "fn main(){}" > src/main.rs && cargo fetch && cargo bui
 # Copy full source
 COPY . .
 
-# Run tests
-RUN cargo test --all --locked -- --nocapture
-
+# Lint and test
+RUN rustup component add clippy && \
+    cargo clippy --all-targets --all-features -- -D warnings && \
+    cargo test --all --locked -- --nocapture

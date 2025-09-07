@@ -3,8 +3,8 @@ use std::io::{self, Read};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
-use clap::{Args, Parser, Subcommand, ValueEnum};
-use cmux_env::{client_send, parse_dotenv, runtime_dir, socket_path, Request, Response, Scope, ShellKind};
+use clap::{Parser, Subcommand, ValueEnum};
+use cmux_env::{client_send, parse_dotenv, Request, Response, Scope, ShellKind};
 
 #[derive(Parser, Debug)]
 #[command(name = "envctl", version, about = "Client for cmux-envd")] 

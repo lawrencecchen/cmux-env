@@ -2,7 +2,6 @@ use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -42,14 +41,6 @@ pub enum ShellKind {
 }
 
 impl ShellKind {
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "bash" => Some(ShellKind::Bash),
-            "zsh" => Some(ShellKind::Zsh),
-            "fish" => Some(ShellKind::Fish),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -316,7 +307,7 @@ fn render_script(shell: ShellKind, actions: &[(String, Option<String>)], new_gen
 
 fn is_valid_key(k: &str) -> bool {
     let first = k.chars().next();
-    if first.map(|c| c == '_' || c.is_ascii_alphabetic()).unwrap_or(false) == false {
+    if !first.map(|c| c == '_' || c.is_ascii_alphabetic()).unwrap_or(false) {
         return false;
     }
     k.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
