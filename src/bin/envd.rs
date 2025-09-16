@@ -5,4 +5,3 @@ fn main() -> Result<()> {
     // Simple foreground server
     run_server()
 }
-

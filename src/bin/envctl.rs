@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use cmux_env::{
-    client_send, parse_dotenv, parse_dotenv_base64, Request, Response, Scope, ShellKind,
+    client_send, client_send_autostart, parse_dotenv, parse_dotenv_base64, Request, Response,
+    Scope, ShellKind,
 };
 
 #[derive(Parser, Debug)]
@@ -114,7 +115,7 @@ fn main() -> Result<()> {
         Commands::Set { kv, dir } => {
             let (key, val) = parse_kv(&kv)?;
             let scope = dir.map(Scope::Dir).unwrap_or(Scope::Global);
-            let _ = client_send(&Request::Set {
+            let _ = client_send_autostart(&Request::Set {
                 key,
                 value: val,
                 scope,
@@ -123,11 +124,11 @@ fn main() -> Result<()> {
         }
         Commands::Unset { key, dir } => {
             let scope = dir.map(Scope::Dir).unwrap_or(Scope::Global);
-            let _ = client_send(&Request::Unset { key, scope })?;
+            let _ = client_send_autostart(&Request::Unset { key, scope })?;
             Ok(())
         }
         Commands::Get { key, pwd } => {
-            let resp = client_send(&Request::Get { key, pwd })?;
+            let resp = client_send_autostart(&Request::Get { key, pwd })?;
             match resp {
                 Response::Value { value } => {
                     if let Some(v) = value {
@@ -139,7 +140,7 @@ fn main() -> Result<()> {
             }
         }
         Commands::List { pwd } => {
-            let resp = client_send(&Request::List { pwd })?;
+            let resp = client_send_autostart(&Request::List { pwd })?;
             match resp {
                 Response::Map { entries } => {
                     for (k, v) in entries {
@@ -169,7 +170,7 @@ fn main() -> Result<()> {
                 let f = File::open(&input).with_context(|| format!("open {}", input))?;
                 parse_dotenv(f)?
             };
-            let _ = client_send(&Request::Load { entries, scope })?;
+            let _ = client_send_autostart(&Request::Load { entries, scope })?;
             Ok(())
         }
         Commands::Export { shell, since, pwd } => {
@@ -184,7 +185,7 @@ fn main() -> Result<()> {
             } else {
                 since
             };
-            let resp = client_send(&Request::Export { shell, since, pwd })?;
+            let resp = client_send_autostart(&Request::Export { shell, since, pwd })?;
             match resp {
                 Response::Export {
                     script,

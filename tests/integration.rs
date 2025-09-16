@@ -7,6 +7,25 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+fn kill_envd_by_pid(tmp: &TempDir) {
+    let pid_path = tmp.path().join("cmux-envd/envd.pid");
+    let contents = match std::fs::read_to_string(&pid_path) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let pid = match contents.trim().parse::<libc::pid_t>() {
+        Ok(pid) => pid,
+        Err(_) => return,
+    };
+    unsafe {
+        libc::kill(pid, libc::SIGTERM);
+    }
+    thread::sleep(Duration::from_millis(100));
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+}
+
 fn start_envd_with_runtime(tmp: &TempDir) -> std::process::Child {
     let mut cmd = Command::cargo_bin("envd").expect("binary envd");
     cmd.env("XDG_RUNTIME_DIR", tmp.path());
@@ -51,6 +70,28 @@ fn ping_and_status() {
     let _ = child.wait();
     let _ = child.wait();
     let _ = child.wait();
+}
+
+#[test]
+fn lazy_start_on_first_set() {
+    let tmp = TempDir::new().unwrap();
+
+    let sock = tmp.path().join("cmux-envd/envd.sock");
+    assert!(!sock.exists());
+
+    run_envctl(&tmp, &["set", "LAZY=1"]).success();
+
+    assert!(sock.exists());
+
+    run_envctl(&tmp, &["get", "LAZY"])
+        .success()
+        .stdout(predicate::str::contains("1"));
+
+    run_envctl(&tmp, &["status"])
+        .success()
+        .stdout(predicate::str::contains("generation:"));
+
+    kill_envd_by_pid(&tmp);
 }
 
 #[test]

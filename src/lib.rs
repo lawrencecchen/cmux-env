@@ -8,7 +8,10 @@ use std::fs;
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 // ---------------- Path helpers ----------------
 
@@ -30,6 +33,13 @@ fn ensure_socket_dir() -> Result<PathBuf> {
     let dir = runtime_dir().join("cmux-envd");
     fs::create_dir_all(&dir).with_context(|| format!("creating dir {}", dir.display()))?;
     Ok(dir)
+}
+
+fn write_pid_file(dir: &Path) -> Result<()> {
+    let pid_path = dir.join("envd.pid");
+    fs::write(&pid_path, format!("{}\n", std::process::id()))
+        .with_context(|| format!("writing pid file {}", pid_path.display()))?;
+    Ok(())
 }
 
 // ---------------- Protocol ----------------
@@ -358,12 +368,13 @@ fn is_valid_key(k: &str) -> bool {
 // --------------- Server plumbing ---------------
 
 pub fn run_server() -> Result<()> {
-    ensure_socket_dir()?;
+    let dir = ensure_socket_dir()?;
     let sock = socket_path();
     if sock.exists() {
         let _ = fs::remove_file(&sock);
     }
     let listener = UnixListener::bind(&sock).with_context(|| format!("bind {}", sock.display()))?;
+    write_pid_file(&dir)?;
     let state = Arc::new(Mutex::new(State::default()));
 
     loop {
@@ -429,8 +440,15 @@ fn handle_request(req: Request, state: &Arc<Mutex<State>>) -> Response {
 // --------------- Client plumbing ---------------
 
 pub fn client_send(req: &Request) -> Result<Response> {
-    let mut stream = UnixStream::connect(socket_path())
-        .with_context(|| format!("connect {}", socket_path().display()))?;
+    client_send_inner(req, false)
+}
+
+pub fn client_send_autostart(req: &Request) -> Result<Response> {
+    client_send_inner(req, true)
+}
+
+fn client_send_inner(req: &Request, autostart: bool) -> Result<Response> {
+    let mut stream = connect_daemon(autostart)?;
     let s = serde_json::to_string(req)?;
     stream.write_all(s.as_bytes())?;
     stream.write_all(b"\n")?;
@@ -442,6 +460,95 @@ pub fn client_send(req: &Request) -> Result<Response> {
     }
     let resp: Response = serde_json::from_str(&line).context("parse response")?;
     Ok(resp)
+}
+
+fn connect_daemon(autostart: bool) -> Result<UnixStream> {
+    let sock = socket_path();
+    match UnixStream::connect(&sock) {
+        Ok(stream) => Ok(stream),
+        Err(err) => {
+            if autostart && should_autostart(err.kind()) {
+                start_daemon_and_connect(&sock)
+            } else {
+                Err(err).with_context(|| format!("connect {}", sock.display()))
+            }
+        }
+    }
+}
+
+fn should_autostart(kind: std::io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+    )
+}
+
+fn start_daemon_and_connect(sock: &Path) -> Result<UnixStream> {
+    ensure_socket_dir()?;
+    let envd_path = envd_executable_path()?;
+    let mut cmd = Command::new(&envd_path);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("spawn {}", envd_path.display()))?;
+
+    let timeout = Duration::from_secs(3);
+    let start = Instant::now();
+    loop {
+        match UnixStream::connect(sock) {
+            Ok(stream) => return Ok(stream),
+            Err(err) => {
+                if !should_autostart(err.kind()) {
+                    let _ = child.kill();
+                    return Err(err).with_context(|| format!("connect {}", sock.display()));
+                }
+                if let Some(status) = child.try_wait()? {
+                    return Err(anyhow!("envd exited immediately with status {}", status));
+                }
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    return Err(anyhow!("envd did not become ready in {:?}", timeout));
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+}
+
+fn envd_executable_path() -> Result<PathBuf> {
+    if let Some(custom) = std::env::var_os("ENVCTL_ENVD_PATH") {
+        let path = PathBuf::from(custom);
+        if path.exists() {
+            return Ok(path);
+        }
+        return Err(anyhow!(
+            "ENVCTL_ENVD_PATH points to missing envd binary: {}",
+            path.display()
+        ));
+    }
+
+    let mut exe = std::env::current_exe().context("determine envctl executable path")?;
+    exe.set_file_name(envd_binary_name());
+    if exe.exists() {
+        Ok(exe)
+    } else {
+        Err(anyhow!(
+            "could not find envd binary next to envctl at {}",
+            exe.display()
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn envd_binary_name() -> &'static str {
+    "envd.exe"
+}
+
+#[cfg(not(windows))]
+fn envd_binary_name() -> &'static str {
+    "envd"
 }
 
 pub fn parse_dotenv<R: Read>(mut r: R) -> Result<Vec<(String, String)>> {
