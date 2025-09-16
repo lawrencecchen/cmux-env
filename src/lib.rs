@@ -1,9 +1,11 @@
 use anyhow::{anyhow, Context, Result};
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,8 +42,7 @@ pub enum ShellKind {
     Fish,
 }
 
-impl ShellKind {
-}
+impl ShellKind {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(tag = "type", content = "path")]
@@ -55,24 +56,56 @@ pub enum Scope {
 pub enum Request {
     Ping,
     Status,
-    Set { key: String, value: String, scope: Scope },
-    Unset { key: String, scope: Scope },
-    Get { key: String, pwd: Option<PathBuf> },
-    List { pwd: Option<PathBuf> },
-    Load { entries: Vec<(String, String)>, scope: Scope },
-    Export { shell: ShellKind, since: u64, pwd: PathBuf },
+    Set {
+        key: String,
+        value: String,
+        scope: Scope,
+    },
+    Unset {
+        key: String,
+        scope: Scope,
+    },
+    Get {
+        key: String,
+        pwd: Option<PathBuf>,
+    },
+    List {
+        pwd: Option<PathBuf>,
+    },
+    Load {
+        entries: Vec<(String, String)>,
+        scope: Scope,
+    },
+    Export {
+        shell: ShellKind,
+        since: u64,
+        pwd: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Response {
     Pong,
-    Status { generation: u64, globals: usize, scopes: usize },
+    Status {
+        generation: u64,
+        globals: usize,
+        scopes: usize,
+    },
     Ok,
-    Value { value: Option<String> },
-    Map { entries: HashMap<String, String> },
-    Export { script: String, new_generation: u64 },
-    Error { message: String },
+    Value {
+        value: Option<String>,
+    },
+    Map {
+        entries: HashMap<String, String>,
+    },
+    Export {
+        script: String,
+        new_generation: u64,
+    },
+    Error {
+        message: String,
+    },
 }
 
 fn read_json(stream: &mut UnixStream) -> Result<Request> {
@@ -165,7 +198,11 @@ impl State {
             Scope::Dir(p) => Scope::Dir(canon(p)),
             x => x,
         };
-        self.history.push(ChangeEvent { generation: self.generation, key, scope });
+        self.history.push(ChangeEvent {
+            generation: self.generation,
+            key,
+            scope,
+        });
     }
 
     pub fn load(&mut self, scope: Scope, entries: Vec<(String, String)>) {
@@ -294,7 +331,9 @@ fn render_script(shell: ShellKind, actions: &[(String, Option<String>)], new_gen
             for (k, v) in actions {
                 if is_valid_key(k) {
                     match v {
-                        Some(val) => out.push_str(&format!("set -x {} {}\n", k, sh_single_quote(val))),
+                        Some(val) => {
+                            out.push_str(&format!("set -x {} {}\n", k, sh_single_quote(val)))
+                        }
                         None => out.push_str(&format!("set -e {}\n", k)),
                     }
                 }
@@ -307,7 +346,10 @@ fn render_script(shell: ShellKind, actions: &[(String, Option<String>)], new_gen
 
 fn is_valid_key(k: &str) -> bool {
     let first = k.chars().next();
-    if !first.map(|c| c == '_' || c.is_ascii_alphabetic()).unwrap_or(false) {
+    if !first
+        .map(|c| c == '_' || c.is_ascii_alphabetic())
+        .unwrap_or(false)
+    {
         return false;
     }
     k.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
@@ -330,7 +372,9 @@ pub fn run_server() -> Result<()> {
         std::thread::spawn(move || {
             let resp = match read_json(&mut stream) {
                 Ok(req) => handle_request(req, &state),
-                Err(e) => Response::Error { message: format!("read error: {}", e) },
+                Err(e) => Response::Error {
+                    message: format!("read error: {}", e),
+                },
             };
             let _ = write_json(&mut stream, &resp);
         });
@@ -345,7 +389,11 @@ fn handle_request(req: Request, state: &Arc<Mutex<State>>) -> Response {
     let mut st = state.lock();
     match req {
         Request::Ping => Response::Pong,
-        Request::Status => Response::Status { generation: st.generation, globals: st.globals.len(), scopes: st.scoped.len() },
+        Request::Status => Response::Status {
+            generation: st.generation,
+            globals: st.globals.len(),
+            scopes: st.scoped.len(),
+        },
         Request::Set { key, value, scope } => {
             st.set(scope, key, value);
             Response::Ok
@@ -370,7 +418,10 @@ fn handle_request(req: Request, state: &Arc<Mutex<State>>) -> Response {
         }
         Request::Export { shell, since, pwd } => {
             let (script, new_generation) = st.export_since(shell, since, &pwd);
-            Response::Export { script, new_generation }
+            Response::Export {
+                script,
+                new_generation,
+            }
         }
     }
 }
@@ -399,7 +450,9 @@ pub fn parse_dotenv<R: Read>(mut r: R) -> Result<Vec<(String, String)>> {
     let mut out = Vec::new();
     for (idx, line) in s.lines().enumerate() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') { continue; }
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
         let line = line.strip_prefix("export ").unwrap_or(line);
         if let Some(eq) = line.find('=') {
             let (k, v) = line.split_at(eq);
@@ -415,6 +468,18 @@ pub fn parse_dotenv<R: Read>(mut r: R) -> Result<Vec<(String, String)>> {
         }
     }
     Ok(out)
+}
+
+pub fn parse_dotenv_base64<S: AsRef<str>>(data: S) -> Result<Vec<(String, String)>> {
+    let raw = data.as_ref();
+    let sanitized: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+    if sanitized.is_empty() {
+        return Err(anyhow!("empty base64 payload"));
+    }
+    let decoded = BASE64_STANDARD
+        .decode(sanitized.as_bytes())
+        .map_err(|e| anyhow!("invalid base64 payload: {}", e))?;
+    parse_dotenv(Cursor::new(decoded))
 }
 
 fn strip_quotes(s: &str) -> String {

@@ -1,10 +1,11 @@
-use assert_cmd::prelude::*;
+use assert_cmd::{cargo::cargo_bin, prelude::*};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use expectrl::{spawn, ControlCode};
 use predicates::prelude::*;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
-use expectrl::{spawn, ControlCode};
 
 fn start_envd_with_runtime(tmp: &TempDir) -> std::process::Child {
     let mut cmd = Command::cargo_bin("envd").expect("binary envd");
@@ -28,7 +29,9 @@ fn start_envd_with_runtime(tmp: &TempDir) -> std::process::Child {
 fn run_envctl(tmp: &TempDir, args: &[&str]) -> assert_cmd::assert::Assert {
     let mut cmd = Command::cargo_bin("envctl").unwrap();
     cmd.env("XDG_RUNTIME_DIR", tmp.path());
-    for a in args { cmd.arg(a); }
+    for a in args {
+        cmd.arg(a);
+    }
     cmd.assert()
 }
 
@@ -37,8 +40,12 @@ fn ping_and_status() {
     let tmp = TempDir::new().unwrap();
     let mut child = start_envd_with_runtime(&tmp);
 
-    run_envctl(&tmp, &["ping"]).success().stdout(predicate::str::contains("pong"));
-    run_envctl(&tmp, &["status"]).success().stdout(predicate::str::contains("generation:"));
+    run_envctl(&tmp, &["ping"])
+        .success()
+        .stdout(predicate::str::contains("pong"));
+    run_envctl(&tmp, &["status"])
+        .success()
+        .stdout(predicate::str::contains("generation:"));
 
     let _ = child.kill();
     let _ = child.wait();
@@ -53,14 +60,16 @@ fn set_and_export_bash() {
 
     run_envctl(&tmp, &["set", "FOO=bar"]).success();
     // export since 0 should contain FOO
-    run_envctl(&tmp, &["export", "bash", "--since", "0"]).success()
+    run_envctl(&tmp, &["export", "bash", "--since", "0"])
+        .success()
         .stdout(predicate::str::contains("export FOO='bar'"))
         .stdout(predicate::str::contains("ENVCTL_GEN"));
 
     // Nothing changed since current gen -> only ENVCTL_GEN should appear, no FOO
     // We don't know current gen, so call export again since 0 should still include FOO
     run_envctl(&tmp, &["unset", "FOO"]).success();
-    run_envctl(&tmp, &["export", "bash", "--since", "0"]).success()
+    run_envctl(&tmp, &["export", "bash", "--since", "0"])
+        .success()
         .stdout(predicate::str::contains("unset -v FOO"));
 
     let _ = child.kill();
@@ -82,14 +91,36 @@ fn dir_scoped_overlay() {
     run_envctl(&tmp, &["set", "VAR=local", "--dir", base.to_str().unwrap()]).success();
 
     // Export for nested dir should pick local
-    run_envctl(&tmp, &["export", "bash", "--since", "0", "--pwd", nested.to_str().unwrap()])
-        .success().stdout(predicate::str::contains("export VAR='local'"));
+    run_envctl(
+        &tmp,
+        &[
+            "export",
+            "bash",
+            "--since",
+            "0",
+            "--pwd",
+            nested.to_str().unwrap(),
+        ],
+    )
+    .success()
+    .stdout(predicate::str::contains("export VAR='local'"));
 
     // Export for unrelated dir should pick global
     let other = tmp.path().join("other");
     std::fs::create_dir_all(&other).unwrap();
-    run_envctl(&tmp, &["export", "bash", "--since", "0", "--pwd", other.to_str().unwrap()])
-        .success().stdout(predicate::str::contains("export VAR='global'"));
+    run_envctl(
+        &tmp,
+        &[
+            "export",
+            "bash",
+            "--since",
+            "0",
+            "--pwd",
+            other.to_str().unwrap(),
+        ],
+    )
+    .success()
+    .stdout(predicate::str::contains("export VAR='global'"));
 
     let _ = child.kill();
     let _ = child.wait();
@@ -103,10 +134,15 @@ fn export_then_eval_in_bash_updates_env() {
     // Set a var and then eval the export in a bash subshell; verify env reflects it
     run_envctl(&tmp, &["set", "FOO=bar"]).success();
 
-    let script = Command::cargo_bin("envctl").unwrap()
+    let script = Command::cargo_bin("envctl")
+        .unwrap()
         .env("XDG_RUNTIME_DIR", tmp.path())
-        .arg("export").arg("bash").arg("--since").arg("0")
-        .output().unwrap();
+        .arg("export")
+        .arg("bash")
+        .arg("--since")
+        .arg("0")
+        .output()
+        .unwrap();
     assert!(script.status.success());
     let export = String::from_utf8_lossy(&script.stdout).to_string();
 
@@ -131,10 +167,15 @@ fn minimal_diff_with_generation() {
     let mut child = start_envd_with_runtime(&tmp);
 
     run_envctl(&tmp, &["set", "X=1"]).success();
-    let first = Command::cargo_bin("envctl").unwrap()
+    let first = Command::cargo_bin("envctl")
+        .unwrap()
         .env("XDG_RUNTIME_DIR", tmp.path())
-        .arg("export").arg("bash").arg("--since").arg("0")
-        .output().unwrap();
+        .arg("export")
+        .arg("bash")
+        .arg("--since")
+        .arg("0")
+        .output()
+        .unwrap();
     assert!(first.status.success());
     let out = String::from_utf8_lossy(&first.stdout);
     // extract new generation from last line
@@ -142,17 +183,29 @@ fn minimal_diff_with_generation() {
     assert!(gen_line.contains("ENVCTL_GEN"));
 
     // parse gen
-    let gen: u64 = gen_line.split('=').next_back().unwrap().trim().parse().unwrap();
+    let gen: u64 = gen_line
+        .split('=')
+        .next_back()
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
 
     // No change; export again since current gen should not include X=1 again
-    let second = Command::cargo_bin("envctl").unwrap()
+    let second = Command::cargo_bin("envctl")
+        .unwrap()
         .env("XDG_RUNTIME_DIR", tmp.path())
         .env("ENVCTL_GEN", gen.to_string())
-        .arg("export").arg("bash")
-        .output().unwrap();
+        .arg("export")
+        .arg("bash")
+        .output()
+        .unwrap();
     assert!(second.status.success());
     let out2 = String::from_utf8_lossy(&second.stdout);
-    assert!(!out2.contains("export X='1'"), "should not re-export unchanged var");
+    assert!(
+        !out2.contains("export X='1'"),
+        "should not re-export unchanged var"
+    );
     assert!(out2.contains("ENVCTL_GEN"));
 
     let _ = child.kill();
@@ -166,15 +219,22 @@ fn interactive_shell_next_command_reflects_set() {
 
     // Prepare a bash rcfile with the new preexec hook
     let rc = tmp.path().join("bashrc");
-    std::fs::write(&rc, format!(
-        r#"export XDG_RUNTIME_DIR="{}"
+    let envctl_path = cargo_bin("envctl");
+    let envctl_dir = envctl_path.parent().expect("envctl parent dir");
+    std::fs::write(
+        &rc,
+        format!(
+            r#"export XDG_RUNTIME_DIR="{runtime}"
 export ENVCTL_GEN=0
-export PATH="/app/target/debug:$PATH"
-{}
+export PATH="{env_dir}:$PATH"
+{hook}
 "#,
-        tmp.path().display(),
-        hook_text_bash()
-    )).unwrap();
+            runtime = tmp.path().display(),
+            env_dir = envctl_dir.display(),
+            hook = hook_text_bash()
+        ),
+    )
+    .unwrap();
 
     // Spawn bash on a pty
     let mut p = spawn(format!("bash --noprofile --rcfile {} -i", rc.display())).unwrap();
@@ -208,7 +268,8 @@ __envctl_debug_trap() {
 }
 trap '__envctl_debug_trap' DEBUG
 __envctl_apply
-"#.to_string()
+"#
+    .to_string()
 }
 
 #[test]
@@ -228,8 +289,75 @@ fn load_from_stdin() {
     assert!(out.status.success());
 
     // List should include FOO and BAZ
-    run_envctl(&tmp, &["list"]).success()
+    run_envctl(&tmp, &["list"])
+        .success()
         .stdout(predicate::str::contains("FOO=bar").and(predicate::str::contains("BAZ=qux")));
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn load_from_base64_literal() {
+    let tmp = TempDir::new().unwrap();
+    let mut child = start_envd_with_runtime(&tmp);
+
+    let content = "FOO=bar\nBAZ=qux\n";
+    let encoded = BASE64_STANDARD.encode(content);
+
+    run_envctl(&tmp, &["load", "--base64", &encoded]).success();
+
+    run_envctl(&tmp, &["list"])
+        .success()
+        .stdout(predicate::str::contains("FOO=bar").and(predicate::str::contains("BAZ=qux")));
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn load_from_base64_stdin() {
+    let tmp = TempDir::new().unwrap();
+    let mut child = start_envd_with_runtime(&tmp);
+
+    let content = "FOO=bar\nBAZ=qux\n";
+    let encoded = BASE64_STANDARD.encode(content);
+
+    let mut cmd = Command::cargo_bin("envctl").unwrap();
+    cmd.env("XDG_RUNTIME_DIR", tmp.path());
+    cmd.arg("load").arg("--base64").arg("-");
+    cmd.stdin(Stdio::piped());
+    let mut ch = cmd.spawn().unwrap();
+    use std::io::Write;
+    ch.stdin
+        .as_mut()
+        .unwrap()
+        .write_all(encoded.as_bytes())
+        .unwrap();
+    let out = ch.wait_with_output().unwrap();
+    assert!(out.status.success());
+
+    run_envctl(&tmp, &["list"])
+        .success()
+        .stdout(predicate::str::contains("FOO=bar").and(predicate::str::contains("BAZ=qux")));
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn load_from_base64_invalid_payload_fails() {
+    let tmp = TempDir::new().unwrap();
+    let mut child = start_envd_with_runtime(&tmp);
+
+    run_envctl(&tmp, &["load", "--base64", "not-valid!!"])
+        .failure()
+        .stderr(predicate::str::contains("invalid base64 payload"));
+
+    // Ensure no vars loaded; list should be empty beyond headers (command prints nothing)
+    run_envctl(&tmp, &["list"])
+        .success()
+        .stdout(predicate::str::is_empty());
 
     let _ = child.kill();
     let _ = child.wait();
