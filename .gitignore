@@ -1,7 +1,6 @@
 # Rust
 target/
 **/*.rs.bk
-Cargo.lock
 
 # Mac
 .DS_Store
@@ -12,4 +11,3 @@ Cargo.lock
 
 # Docker artifacts
 *.docker-image-id
-
