@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::PathBuf;
 
@@ -60,6 +60,12 @@ enum Commands {
     },
     /// Print hook for bash/zsh/fish
     Hook { shell: ShellType },
+    /// Install hook into the user's shell rc file
+    InstallHook {
+        shell: ShellType,
+        #[arg(long, help = "Override rc file path")]
+        rcfile: Option<PathBuf>,
+    },
     /// Show daemon status
     Status,
     /// Ping daemon
@@ -79,6 +85,16 @@ impl From<ShellType> for ShellKind {
             ShellType::Bash => ShellKind::Bash,
             ShellType::Zsh => ShellKind::Zsh,
             ShellType::Fish => ShellKind::Fish,
+        }
+    }
+}
+
+impl ShellType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ShellType::Bash => "bash",
+            ShellType::Zsh => "zsh",
+            ShellType::Fish => "fish",
         }
     }
 }
@@ -205,7 +221,91 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Commands::InstallHook { shell, rcfile } => {
+            install_hook(shell, rcfile)?;
+            Ok(())
+        }
     }
+}
+
+fn install_hook(shell: ShellType, rcfile: Option<PathBuf>) -> Result<()> {
+    const START_MARKER: &str = "# >>> envctl hook >>>";
+    const END_MARKER: &str = "# <<< envctl hook <<<";
+
+    let rc_path = rcfile.unwrap_or(default_rc_path(shell)?);
+    if let Some(parent) = rc_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating rcfile directory {}", parent.display()))?;
+    }
+
+    let mut contents = if rc_path.exists() {
+        fs::read_to_string(&rc_path)
+            .with_context(|| format!("reading rcfile {}", rc_path.display()))?
+    } else {
+        String::new()
+    };
+
+    if let Some(start_idx) = contents.find(START_MARKER) {
+        let end_search = &contents[start_idx..];
+        if let Some(end_rel) = end_search.find(END_MARKER) {
+            let mut end_idx = start_idx + end_rel + END_MARKER.len();
+            while let Some(&byte) = contents.as_bytes().get(end_idx) {
+                if byte == b'\n' || byte == b'\r' {
+                    end_idx += 1;
+                } else {
+                    break;
+                }
+            }
+            contents.replace_range(start_idx..end_idx, "");
+        } else {
+            contents.truncate(start_idx);
+        }
+        contents = contents.trim_end_matches('\n').to_string();
+    }
+
+    if !contents.is_empty() && !contents.ends_with('\n') {
+        contents.push('\n');
+    }
+
+    let hook_body = match shell {
+        ShellType::Bash => hook_bash(),
+        ShellType::Zsh => hook_zsh(),
+        ShellType::Fish => hook_fish(),
+    };
+
+    let mut block = String::new();
+    block.push_str(START_MARKER);
+    block.push('\n');
+    block.push_str(&hook_body);
+    if !hook_body.ends_with('\n') {
+        block.push('\n');
+    }
+    block.push_str(END_MARKER);
+    block.push('\n');
+
+    contents.push_str(&block);
+
+    fs::write(&rc_path, contents)
+        .with_context(|| format!("writing rcfile {}", rc_path.display()))?;
+
+    println!(
+        "Installed envctl hook for {} at {}",
+        shell.as_str(),
+        rc_path.display()
+    );
+
+    Ok(())
+}
+
+fn default_rc_path(shell: ShellType) -> Result<PathBuf> {
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let base = PathBuf::from(home);
+    let path = match shell {
+        ShellType::Bash => base.join(".bashrc"),
+        ShellType::Zsh => base.join(".zshrc"),
+        ShellType::Fish => base.join(".config").join("fish").join("config.fish"),
+    };
+    Ok(path)
 }
 
 fn parse_kv(s: &str) -> Result<(String, String)> {

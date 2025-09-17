@@ -2,6 +2,8 @@ use assert_cmd::{cargo::cargo_bin, prelude::*};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use expectrl::{spawn, ControlCode};
 use predicates::prelude::*;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -287,12 +289,164 @@ export PATH="{env_dir}:$PATH"
     run_envctl(&tmp, &["set", "BAR=42"]).success();
 
     // Now in bash, the next command should see BAR because preexec runs before command
-    p.send_line(r#"printf "%s\n" "$BAR""#).unwrap();
+    p.send_line("printf '%s\\n' \"$BAR\"").unwrap();
     // Expect '42'
     p.expect("42").unwrap();
 
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[test]
+fn install_hook_installs_bash_block() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let rc = home.join(".bashrc");
+    fs::write(&rc, "export FOO=1\n").unwrap();
+
+    let hook_output = Command::cargo_bin("envctl")
+        .unwrap()
+        .arg("hook")
+        .arg("bash")
+        .output()
+        .unwrap();
+    assert!(hook_output.status.success());
+    let hook_text = String::from_utf8_lossy(&hook_output.stdout).to_string();
+
+    let mut cmd = Command::cargo_bin("envctl").unwrap();
+    cmd.env("HOME", &home);
+    cmd.env("XDG_RUNTIME_DIR", tmp.path());
+    cmd.arg("install-hook").arg("bash");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Installed envctl hook for bash"));
+
+    let contents = fs::read_to_string(&rc).unwrap();
+    assert!(contents.starts_with("export FOO=1"));
+    assert_eq!(contents.matches("# >>> envctl hook >>>").count(), 1);
+    assert_eq!(contents.matches("# <<< envctl hook <<<").count(), 1);
+    assert!(contents.contains(hook_text.trim()));
+
+    let mut second = Command::cargo_bin("envctl").unwrap();
+    second.env("HOME", &home);
+    second.env("XDG_RUNTIME_DIR", tmp.path());
+    second.arg("install-hook").arg("bash");
+    second.assert().success();
+
+    let contents2 = fs::read_to_string(&rc).unwrap();
+    assert_eq!(contents2.matches("# >>> envctl hook >>>").count(), 1);
+    assert!(contents2.contains("export FOO=1"));
+}
+
+#[test]
+fn install_hook_multiple_shells_share_state() {
+    let tmp = TempDir::new().unwrap();
+    let mut child = start_envd_with_runtime(&tmp);
+
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let rc = home.join(".bashrc");
+    let envctl_path = cargo_bin("envctl");
+    let envctl_dir = envctl_path.parent().expect("envctl dir");
+    fs::write(
+        &rc,
+        format!(
+            "export XDG_RUNTIME_DIR=\"{}\"\nexport ENVCTL_GEN=0\nexport PATH=\"{}:$PATH\"\n",
+            tmp.path().display(),
+            envctl_dir.display()
+        ),
+    )
+    .unwrap();
+
+    let status = Command::cargo_bin("envctl")
+        .unwrap()
+        .env("HOME", &home)
+        .env("XDG_RUNTIME_DIR", tmp.path())
+        .arg("install-hook")
+        .arg("bash")
+        .arg("--rcfile")
+        .arg(&rc)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let launcher = tmp.path().join("launch.sh");
+    let script = format!(
+        "#!/usr/bin/env bash\nexport HOME={home}\nexport XDG_RUNTIME_DIR={runtime}\nexport PATH={envctl_dir}:\"$PATH\"\nexec bash --noprofile --rcfile {rc} -i\n",
+        home = shell_escape(&home.to_string_lossy()),
+        runtime = shell_escape(&tmp.path().to_string_lossy()),
+        envctl_dir = shell_escape(&envctl_dir.to_string_lossy()),
+        rc = shell_escape(&rc.to_string_lossy())
+    );
+    fs::write(&launcher, script).unwrap();
+    let mut perms = fs::metadata(&launcher).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&launcher, perms).unwrap();
+    let launcher_cmd = launcher.to_string_lossy().to_string();
+
+    let mut shell1 = spawn(launcher_cmd.as_str()).unwrap();
+    shell1.send(ControlCode::CarriageReturn).unwrap();
+    shell1.send_line("printf '__READY__\\n'").unwrap();
+    shell1.expect("__READY__").unwrap();
+
+    let mut shell2 = spawn(launcher_cmd.as_str()).unwrap();
+    shell2.send(ControlCode::CarriageReturn).unwrap();
+    shell2.send_line("printf '__READY__\\n'").unwrap();
+    shell2.expect("__READY__").unwrap();
+
+    shell2
+        .send_line("printf '__VAL__:%s\\n' \"${SHARED:-missing}\"")
+        .unwrap();
+    shell2.expect("__VAL__:missing").unwrap();
+
+    shell1
+        .send_line("envctl set SHARED=from_shell1; printf '__SET__\\n'")
+        .unwrap();
+    shell1.expect("__SET__").unwrap();
+
+    shell1
+        .send_line("printf '__SELF__:%s\\n' \"${SHARED:-missing}\"")
+        .unwrap();
+    shell1.expect("__SELF__:from_shell1").unwrap();
+
+    shell2
+        .send_line("printf '__VAL__:%s\\n' \"${SHARED:-missing}\"")
+        .unwrap();
+    shell2.expect("__VAL__:from_shell1").unwrap();
+
+    shell2
+        .send_line("envctl set SHARED=from_shell2; printf '__SET2__\\n'")
+        .unwrap();
+    shell2.expect("__SET2__").unwrap();
+
+    shell1
+        .send_line("printf '__SELF2__:%s\\n' \"${SHARED:-missing}\"")
+        .unwrap();
+    shell1.expect("__SELF2__:from_shell2").unwrap();
+
+    shell1.send_line("exit").unwrap();
+    shell2.send_line("exit").unwrap();
+
+    drop(shell1);
+    drop(shell2);
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn shell_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 fn hook_text_bash() -> String {

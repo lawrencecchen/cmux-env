@@ -26,6 +26,23 @@ envctl list
 envctl export bash --since 0
 ```
 
+### Shell integration
+
+To keep interactive shells synchronized with the daemon, install the
+prompt hook into your shell's rc file:
+
+```sh
+envctl install-hook bash
+envctl install-hook zsh
+envctl install-hook fish
+```
+
+The command writes the hook between marker comments in `~/.bashrc`,
+`~/.zshrc`, or `~/.config/fish/config.fish` by default. Use
+`--rcfile <path>` to install the hook into a custom file. You can still
+inspect or embed the raw hook script with `envctl hook <shell>` if you want
+to manage the integration manually.
+
 ### Loading .env data
 
 `envctl load` can ingest dotenv-style files from disk or standard input:
