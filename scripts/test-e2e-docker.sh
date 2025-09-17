@@ -19,19 +19,27 @@ export PATH="/usr/local/cargo/bin:$PATH"
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TMPDIR=$(mktemp -d -t cmux-e2e-XXXXXX)
-CARGO_TARGET_DIR="$TMPDIR/target"
-export CARGO_TARGET_DIR
-BIN_DIR="$CARGO_TARGET_DIR/debug"
+
+# When running in Docker, binaries are already built
+if [[ "${IN_DOCKER:-}" == "1" ]]; then
+  BIN_DIR="/app/target/debug"
+else
+  CARGO_TARGET_DIR="$TMPDIR/target"
+  export CARGO_TARGET_DIR
+  BIN_DIR="$CARGO_TARGET_DIR/debug"
+
+  echo "Building envd/envctl binaries..." >&2
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --preserve-status 60 cargo build --locked --bins
+  else
+    cargo build --locked --bins
+  fi
+  echo "Build completed successfully" >&2
+fi
+
 ENVD_BIN="$BIN_DIR/envd"
 ENVCTL_BIN="$BIN_DIR/envctl"
 
-echo "Building envd/envctl binaries..." >&2
-if command -v timeout >/dev/null 2>&1; then
-  timeout --preserve-status 60 cargo build --locked --bins
-else
-  cargo build --locked --bins
-fi
-echo "Build completed successfully" >&2
 cleanup() {
   if [[ -n "${DAEMON_PID:-}" ]] && kill -0 "$DAEMON_PID" 2>/dev/null; then
     kill "$DAEMON_PID" 2>/dev/null || true
@@ -45,9 +53,22 @@ export XDG_RUNTIME_DIR="$TMPDIR/runtime"
 mkdir -p "$XDG_RUNTIME_DIR/cmux-envd"
 
 echo "Starting envd daemon..." >&2
+echo "XDG_RUNTIME_DIR: $XDG_RUNTIME_DIR" >&2
+echo "Socket path will be: $XDG_RUNTIME_DIR/cmux-envd/envd.sock" >&2
 "$ENVD_BIN" >/tmp/envd.log 2>&1 &
 DAEMON_PID=$!
 echo "envd daemon started with PID $DAEMON_PID" >&2
+
+# Give daemon a moment to start
+sleep 0.5
+
+# Check if daemon is still running
+if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+  echo "ERROR: envd daemon died immediately" >&2
+  echo "envd log contents:" >&2
+  cat /tmp/envd.log >&2 || echo "No log file found" >&2
+  exit 1
+fi
 
 # Wait for daemon socket with timeout
 i=0
