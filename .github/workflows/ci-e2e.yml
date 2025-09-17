@@ -1,8 +1,8 @@
-name: Docker E2E Tests
+name: Docker E2E Tests (Optional)
 
+# This workflow tests the e2e suite in a Docker container
+# It's optional and mainly useful for debugging container-specific issues
 on:
-  push:
-    branches: [main]
   pull_request:
     paths:
       - 'Dockerfile*'
