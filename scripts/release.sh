@@ -17,38 +17,60 @@ ROOT_DIR="$(here_dir)"
 cd "$ROOT_DIR"
 
 VERSION="${1:-}"
+
 if [[ -z "$VERSION" ]]; then
-  echo "usage: scripts/release.sh <version> (e.g., 0.0.1)" >&2
+  echo "usage: scripts/release.sh <version>" >&2
+  echo "  version: semantic version (e.g., 0.0.3)" >&2
   exit 1
 fi
 
 # Ensure Cargo.toml version matches
 manifest_ver=$(grep -m1 '^version *= *"' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
 if [[ "$manifest_ver" != "$VERSION" ]]; then
-  echo "error: Cargo.toml version ($manifest_ver) does not match $VERSION" >&2
-  echo "hint: update Cargo.toml or pass correct version" >&2
-  exit 1
+  echo "📝 Updating Cargo.toml version from $manifest_ver to $VERSION..."
+  sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+  rm -f Cargo.toml.bak
+  git add Cargo.toml
+  git commit -m "chore: bump version to $VERSION" || {
+    echo "warning: no changes to commit (version might already be correct)" >&2
+  }
+else
+  echo "✅ Cargo.toml version already matches $VERSION"
 fi
 
 tag="v${VERSION}"
 
-# Verify clean tree
-if ! git diff-index --quiet HEAD --; then
-  echo "error: working tree is not clean; commit or stash changes" >&2
+# Check for uncommitted changes other than Cargo.toml
+if git diff-index HEAD -- | grep -v Cargo.toml | grep -q .; then
+  echo "error: working tree has uncommitted changes besides Cargo.toml" >&2
+  echo "hint: commit or stash your changes first" >&2
   exit 1
 fi
 
+echo "🏷️  Creating release tag $tag..."
+
 # Create tag and push
 if git rev-parse "$tag" >/dev/null 2>&1; then
-  echo "Tag $tag already exists; skipping tag creation"
+  echo "⚠️  Tag $tag already exists locally"
+  read -p "Delete and recreate tag? (y/N) " -n 1 -r
+  echo
+  if [[ $REPLY =~ ^[Yy]$ ]]; then
+    git tag -d "$tag"
+    git push origin :refs/tags/"$tag" 2>/dev/null || true
+    git tag -a "$tag" -m "Release $tag"
+  else
+    echo "Proceeding with existing tag"
+  fi
 else
   git tag -a "$tag" -m "Release $tag"
 fi
 
+echo "🚀 Pushing tag to origin..."
 git push origin "$tag"
 
 # Wait for release assets via gh release view (avoids plumbing with workflow runs)
-echo "Waiting for release assets to be available..."
+echo "⏳ Waiting for GitHub Actions to build release assets..."
+echo "   (This triggers the release workflow at .github/workflows/release.yml)"
 assets_needed=(
   "cmux-env-${VERSION}-x86_64-unknown-linux-musl.tar.gz"
   "cmux-env-${VERSION}-aarch64-unknown-linux-musl.tar.gz"
@@ -93,6 +115,11 @@ else
   echo "install.sh verified: remote content matches local file."
 fi
 
-echo "Release $tag is ready. Try installing with:"
+echo ""
+echo "✅ Release $tag is ready!"
+echo ""
+echo "📦 Install with:"
 echo "  curl -fsSL $raw_url | bash"
+echo ""
+echo "🔗 GitHub Release: https://github.com/$(gh repo view --json nameWithOwner -q .nameWithOwner)/releases/tag/$tag"
 

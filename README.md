@@ -73,6 +73,36 @@ cargo test
 
 Several tests spawn real `envd`/`envctl` binaries, so they expect the current project to be built with `cargo`.
 
+## Release Process
+
+To create a new release:
+
+```sh
+# Option 1: Fully automated (recommended)
+scripts/prepare-release.sh 0.0.4
+
+# Option 2: Manual with auto-update
+scripts/release.sh 0.0.4 --auto-update
+
+# Option 3: Fully manual
+# 1. Update version in Cargo.toml
+# 2. Commit: git commit -am "chore: bump version to 0.0.4"
+# 3. Run: scripts/release.sh 0.0.4
+```
+
+The `prepare-release.sh` script will:
+- Pull latest changes from main
+- Run tests to ensure everything works
+- Update Cargo.toml version if needed
+- Commit the version change
+- Create and push the release tag
+- Wait for GitHub Actions to build release artifacts
+
+The release workflow automatically:
+- Builds Linux x86_64 and aarch64 binaries
+- Creates GitHub release with artifacts
+- Makes binaries available for the install script
+
 ## License
 
 This project is provided as-is for experimentation.
