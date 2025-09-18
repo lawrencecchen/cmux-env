@@ -205,6 +205,58 @@ fn export_then_eval_in_bash_updates_env() {
 }
 
 #[test]
+fn multi_line_value_round_trip_via_export() {
+    let tmp = TempDir::new().unwrap();
+    let mut child = start_envd_with_runtime(&tmp);
+
+    let multi_line_val = "hellowrold\nthisissecondline\nyesyesyes";
+    let set_arg = format!("MULTI_LINE_THING={}", multi_line_val);
+    let set_args = ["set", set_arg.as_str()];
+    run_envctl(&tmp, &set_args).success();
+
+    let output = Command::cargo_bin("envctl")
+        .unwrap()
+        .env("XDG_RUNTIME_DIR", tmp.path())
+        .arg("get")
+        .arg("MULTI_LINE_THING")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let retrieved = String::from_utf8_lossy(&output.stdout).to_string();
+    assert_eq!(retrieved, format!("{}\n", multi_line_val));
+
+    let script = Command::cargo_bin("envctl")
+        .unwrap()
+        .env("XDG_RUNTIME_DIR", tmp.path())
+        .arg("export")
+        .arg("bash")
+        .arg("--since")
+        .arg("0")
+        .output()
+        .unwrap();
+    assert!(script.status.success());
+    let export = String::from_utf8_lossy(&script.stdout).to_string();
+    assert!(export.contains("export MULTI_LINE_THING='hellowrold\nthisissecondline\nyesyesyes'"));
+
+    let mut bash = Command::new("bash");
+    bash.env("XDG_RUNTIME_DIR", tmp.path());
+    bash.arg("-lc");
+    let verify = format!(
+        "{}\nprintf '__START__%s__END__' \"$MULTI_LINE_THING\"",
+        export
+    );
+    bash.arg(verify);
+    let out = bash.output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let expected = format!("__START__{}__END__", multi_line_val);
+    assert_eq!(stdout, expected);
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
 fn minimal_diff_with_generation() {
     let tmp = TempDir::new().unwrap();
     let mut child = start_envd_with_runtime(&tmp);
