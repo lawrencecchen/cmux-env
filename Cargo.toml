@@ -1,6 +1,6 @@
 [package]
 name = "cmux-env"
-version = "0.0.6"
+version = "0.0.7"
 edition = "2021"
 
 # Two binaries: envd (daemon) and envctl (client)
