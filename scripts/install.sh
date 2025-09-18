@@ -136,6 +136,5 @@ esac
 
 echo
 echo "Next steps:"
-echo "  1) Start the daemon in your session: 'envd >/dev/null 2>&1 &'"
-echo "  2) Add a shell hook: 'envctl hook bash|zsh|fish' appended to your shell rc"
-echo "  3) Try: 'envctl set FOO=bar' then open a new prompt"
+echo "  1) Install the shell hook: 'envctl install-hook bash|zsh|fish'"
+echo "  2) Try: 'envctl set FOO=bar' then open a new prompt"
