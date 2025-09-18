@@ -82,7 +82,7 @@ while (( SECONDS < deadline )); do
   json=$(gh release view "$tag" --json assets -q .assets[]?.name 2>/dev/null || true)
   ok=1
   for a in "${assets_needed[@]}"; do
-    if ! grep -q "^\s*\"$a\"\s*$" <<<"$json"; then ok=0; break; fi
+    if ! grep -q "$a" <<<"$json"; then ok=0; break; fi
   done
   if (( ok == 1 )); then
     echo "All assets are uploaded."
