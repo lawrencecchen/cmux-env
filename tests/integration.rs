@@ -298,6 +298,57 @@ export PATH="{env_dir}:$PATH"
 }
 
 #[test]
+fn interactive_shell_chains_existing_debug_trap() {
+    let tmp = TempDir::new().unwrap();
+    let mut child = start_envd_with_runtime(&tmp);
+
+    run_envctl(&tmp, &["set", "CHAINED=ok"]).success();
+
+    let rc = tmp.path().join("bashrc");
+    let log_path = tmp.path().join("debug.log");
+    let envctl_path = cargo_bin("envctl");
+    let envctl_dir = envctl_path.parent().expect("envctl parent dir");
+    std::fs::write(
+        &rc,
+        format!(
+            r#"export XDG_RUNTIME_DIR="{runtime}"
+export ENVCTL_GEN=0
+export PATH="{env_dir}:$PATH"
+__existing_debug_log="{log}"
+__existing_debug_trap() {{
+  printf '%s:%s\n' "$BASH_COMMAND" "$1" >> "$__existing_debug_log"
+}}
+trap '__existing_debug_trap "$_"' DEBUG
+{hook}
+"#,
+            runtime = tmp.path().display(),
+            env_dir = envctl_dir.display(),
+            log = log_path.display(),
+            hook = hook_text_bash()
+        ),
+    )
+    .unwrap();
+
+    let mut p = spawn(format!("bash --noprofile --rcfile {} -i", rc.display())).unwrap();
+    p.send(ControlCode::CarriageReturn).unwrap();
+
+    p.send_line("printf '__VAL__:%s\\n' \"$CHAINED\"").unwrap();
+    p.expect("__VAL__:ok").unwrap();
+
+    let log_contents = std::fs::read_to_string(&log_path).unwrap();
+    assert!(
+        log_contents.contains("printf '__VAL__:%s\\n' \"$CHAINED\":"),
+        "unexpected log contents:\n{}",
+        log_contents
+    );
+
+    p.send_line("exit").unwrap();
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
 fn install_hook_installs_bash_block() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path().join("home");
@@ -456,12 +507,39 @@ fn hook_text_bash() -> String {
   out="$(envctl export bash --since "${ENVCTL_GEN:-0}" --pwd "$PWD")" || return
   eval "$out"
 }
-__envctl_debug_trap() {
-  trap - DEBUG
-  __envctl_apply
-  trap '__envctl_debug_trap' DEBUG
+__envctl_capture_debug_trap() {
+  builtin local -a __envctl_terms
+  builtin eval "__envctl_terms=( $(trap -p DEBUG) )" 2>/dev/null || return
+  if (( ${#__envctl_terms[@]} >= 3 )); then
+    builtin printf '%s' "${__envctl_terms[2]}"
+  fi
 }
-trap '__envctl_debug_trap' DEBUG
+__envctl_debug_trap() {
+  local __envctl_status=$?
+  local __envctl_trap_arg="$1"
+  if (( ${__envctl_in_debug_trap:-0} )); then
+    return $__envctl_status
+  fi
+  __envctl_in_debug_trap=1
+  local __envctl_saved_bash_command=$BASH_COMMAND
+  local __envctl_saved_arg="$__envctl_trap_arg"
+  __envctl_apply
+  if [[ -n "${__envctl_prev_debug_trap:-}" ]]; then
+    BASH_COMMAND=$__envctl_saved_bash_command
+    : "$__envctl_saved_arg"
+    builtin eval "${__envctl_prev_debug_trap}"
+  fi
+  __envctl_in_debug_trap=0
+  return $__envctl_status
+}
+if [[ -z "${__envctl_debug_trap_installed:-}" ]]; then
+  __envctl_prev_debug_trap="$(__envctl_capture_debug_trap)"
+  if [[ "${__envctl_prev_debug_trap}" == '__envctl_debug_trap'* ]]; then
+    __envctl_prev_debug_trap=''
+  fi
+  __envctl_debug_trap_installed=1
+fi
+trap '__envctl_debug_trap "$_"' DEBUG
 __envctl_apply
 "#
     .to_string()
