@@ -59,8 +59,8 @@ if [[ "$current_ver" != "$VERSION" ]]; then
   echo "🔨 Building to verify version update..."
   cargo build --release --quiet
 
-  # Commit the version change
-  git add Cargo.toml
+  # Commit the version change (including Cargo.lock)
+  git add Cargo.toml Cargo.lock
   git commit -m "chore: bump version to $VERSION"
   echo "✅ Version updated and committed"
 else
