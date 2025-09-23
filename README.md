@@ -106,3 +106,7 @@ The release workflow automatically:
 ## License
 
 This project is provided as-is for experimentation.
+
+Code whispers secrets,
+Bugs dance in the shadows deep,
+Debug with gentle care.
