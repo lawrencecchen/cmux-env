@@ -106,3 +106,9 @@ The release workflow automatically:
 ## License
 
 This project is provided as-is for experimentation.
+
+---
+
+Code flows like a river  
+Bugs hide in the shadows deep  
+Debug with mindful eye
