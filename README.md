@@ -106,3 +106,7 @@ The release workflow automatically:
 ## License
 
 This project is provided as-is for experimentation.
+
+Code flows like a stream
+Branches merge in harmony
+Bugs hide in the shadows
