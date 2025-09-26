@@ -106,3 +106,9 @@ The release workflow automatically:
 ## License
 
 This project is provided as-is for experimentation.
+
+---
+
+*Variables flow,*
+*Through shells and paths they whisper—*
+*Daemon keeps the truth.*
