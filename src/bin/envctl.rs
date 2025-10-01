@@ -144,7 +144,14 @@ fn main() -> Result<()> {
             Ok(())
         }
         Commands::Get { key, pwd } => {
-            let resp = client_send_autostart(&Request::Get { key, pwd })?;
+            let pwd = match pwd {
+                Some(pwd) => pwd,
+                None => std::env::current_dir()?,
+            };
+            let resp = client_send_autostart(&Request::Get {
+                key,
+                pwd: Some(pwd),
+            })?;
             match resp {
                 Response::Value { value } => {
                     if let Some(v) = value {
@@ -156,11 +163,23 @@ fn main() -> Result<()> {
             }
         }
         Commands::List { pwd } => {
-            let resp = client_send_autostart(&Request::List { pwd })?;
+            let pwd = match pwd {
+                Some(pwd) => pwd,
+                None => std::env::current_dir()?,
+            };
+            let resp = client_send_autostart(&Request::List { pwd: Some(pwd) })?;
             match resp {
                 Response::Map { entries } => {
-                    for (k, v) in entries {
-                        println!("{}={}", k, v);
+                    let mut pairs: Vec<_> = entries.into_iter().collect();
+                    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+
+                    if pairs.is_empty() {
+                        println!("No environment variables found.");
+                    } else {
+                        println!("Active environment variables ({}):", pairs.len());
+                        for (key, value) in pairs {
+                            println!("  - {}={}", key, value);
+                        }
                     }
                     Ok(())
                 }
