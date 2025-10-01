@@ -170,6 +170,45 @@ fn dir_scoped_overlay() {
 }
 
 #[test]
+fn get_and_list_default_to_client_pwd() {
+    let tmp = TempDir::new().unwrap();
+    let mut child = start_envd_with_runtime(&tmp);
+
+    let base = tmp.path().join("proj");
+    let nested = base.join("sub");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    run_envctl(&tmp, &["set", "VAR=global"]).success();
+    run_envctl(&tmp, &["set", "VAR=local", "--dir", base.to_str().unwrap()]).success();
+    run_envctl(
+        &tmp,
+        &["set", "ONLY_OVERLAY=1", "--dir", base.to_str().unwrap()],
+    )
+    .success();
+
+    let mut get_cmd = Command::cargo_bin("envctl").unwrap();
+    get_cmd.env("XDG_RUNTIME_DIR", tmp.path());
+    get_cmd.current_dir(&nested);
+    get_cmd.arg("get").arg("VAR");
+    get_cmd
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("local"));
+
+    let mut list_cmd = Command::cargo_bin("envctl").unwrap();
+    list_cmd.env("XDG_RUNTIME_DIR", tmp.path());
+    list_cmd.current_dir(&nested);
+    list_cmd.arg("list");
+    list_cmd
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ONLY_OVERLAY"));
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
 fn export_then_eval_in_bash_updates_env() {
     let tmp = TempDir::new().unwrap();
     let mut child = start_envd_with_runtime(&tmp);
@@ -682,7 +721,7 @@ fn load_from_base64_invalid_payload_fails() {
     // Ensure no vars loaded; list should be empty beyond headers (command prints nothing)
     run_envctl(&tmp, &["list"])
         .success()
-        .stdout(predicate::str::is_empty());
+        .stdout(predicate::str::contains("No environment variables found."));
 
     let _ = child.kill();
     let _ = child.wait();
